@@ -199,6 +199,37 @@ impl From<Srgb8> for Lab {
 //////// Color difference ////////
 
 impl Lab {
+    /// Using the "graphic arts" constants
+    pub fn cie1994_distance2(lab1: Lab, lab2: Lab) -> f64 {
+        let diff2_l = (lab1.l - lab2.l).powi(2);
+        let diff2_chroma = (lab1.c - lab2.c).powi(2);
+        let diff2_hue = (lab1.a - lab2.a).powi(2) + (lab1.b - lab2.b).powi(2) - diff2_chroma;
+
+        let sc = 1.0 + 0.045 * lab1.c;
+        let sh = 1.0 + 0.015 * lab1.c;
+
+        diff2_l + diff2_chroma / sc.powi(2) + diff2_hue / sh.powi(2)
+    }
+
+    // From Warren D. Smith's Color-Packings and Color-Distances, 2018 (https://rangevoting.org/ColorPack.html)
+    pub fn sym_cie1994_distance2(lab1: Lab, lab2: Lab) -> f64 {
+        let diff2_l = (lab1.l - lab2.l).powi(2);
+        let diff2_chroma = (lab1.c - lab2.c).powi(2);
+        let diff2_hue = (lab1.a - lab2.a).powi(2) + (lab1.b - lab2.b).powi(2) - diff2_chroma;
+
+        let avg_chroma = (lab1.c + lab2.c) / 2.0;
+        let sc = 1.0 + 0.045 * avg_chroma;
+        let sh = 1.0 + 0.015 * avg_chroma;
+
+        diff2_l + diff2_chroma / sc.powi(2) + diff2_hue / sh.powi(2)
+    }
+
+    // From Warren D. Smith's Color-Packings and Color-Distances, 2018 (https://rangevoting.org/ColorPack.html)
+    pub fn wds_cie1994_distance2(lab1: Lab, lab2: Lab) -> f64 {
+        let base_dist = Lab::sym_cie1994_distance2(lab1, lab2);
+        205.85012080886 * base_dist / (100.0 + base_dist.powf(82.0 / 81.0))
+    }
+
     pub fn ciede2000_distance2(lab1: Lab, lab2: Lab) -> f64 {
         use core::f64::consts::PI;
         const TAU: f64 = PI * 2.0;
@@ -264,5 +295,74 @@ impl Lab {
         let rt = -2.0 * (avg_c_adj.powi(7) / (avg_c_adj.powi(7) + 25.0_f64.powi(7))).sqrt() * (TAU / 6.0 * (-(avg_h_adj / 25.0f64.to_radians() - 11.0).powi(2)).exp()).sin();
 
         (diff_l_adj / sl).powi(2) + (diff_c_adj / sc).powi(2) + (diff_H_adj / sh).powi(2) + rt * (diff_c_adj / sc) * (diff_H_adj / sh)
+    }
+
+    // From Warren D. Smith's Color-Packings and Color-Distances, 2018 (https://rangevoting.org/ColorPack.html)
+    pub fn cont_ciede2000_distance2(lab1: Lab, lab2: Lab) -> f64 {
+        use core::f64::consts::PI;
+        const TAU: f64 = PI * 2.0;
+
+        // This is a fairly direct translation from Wikipedia's description, with a few optimizations
+        let l1 = lab1.l;
+        let l2 = lab2.l;
+        let a1 = lab1.a;
+        let a2 = lab2.a;
+        let b1 = lab1.b;
+        let b2 = lab2.b;
+
+        let c1 = lab1.c;
+        let c2 = lab2.c;
+
+        let diff_l_adj = l2 - l1;
+        let avg_l = (l1 + l2) / 2.0;
+        let avg_c = (c1 + c2) / 2.0;
+        let adj_coeff = 1.5 - 0.5 * (avg_c.powi(7) / (avg_c.powi(7) + 25.0_f64.powi(7))).sqrt();
+        let a1_adj = a1 * adj_coeff;
+        let a2_adj = a2 * adj_coeff;
+        let c1_adj = (a1_adj.powi(2) + b1.powi(2)).sqrt(); // This is faster than .hypot and the inaccuracy is slight enough to be ignored
+        let c2_adj = (a2_adj.powi(2) + b2.powi(2)).sqrt();
+        let avg_c_adj = (c1_adj + c2_adj) / 2.0;
+        let diff_c_adj = c2_adj - c1_adj;
+        let h1_adj = b1.atan2(a1_adj);
+        let h2_adj = b2.atan2(a2_adj);
+        let diff_h_adj = if (h2_adj - h1_adj).abs() <= PI {
+            h2_adj - h1_adj
+        } else if h2_adj <= h1_adj {
+            h2_adj - h1_adj + TAU
+        } else {
+            h2_adj - h1_adj - TAU
+        };
+        let diff_H_adj = 2.0 * (c1_adj * c2_adj).sqrt() * (diff_h_adj / 2.0).sin();
+        let avg_h_adj = if (h2_adj - h1_adj).abs() <= PI {
+            (h1_adj + h2_adj) / 2.0
+        } else if h1_adj + h2_adj < TAU {
+            (h1_adj + h2_adj) / 2.0 + PI
+        } else {
+            (h1_adj + h2_adj) / 2.0 - PI
+        };
+
+        // TODO: Use multi-angle formulas to only compute sin/cos once
+        let t = 1.0 + 0.24 * (2.0 * avg_h_adj).cos()
+                    - 0.2 * (4.0 * avg_h_adj - TAU * 63.0 / 360.0).cos()
+                    + (0.32 * (3.0 * avg_h_adj + TAU / 60.0).cos() - 0.17 * (avg_h_adj - TAU / 12.0).cos()) * (diff_h_adj * 0.5).cos();
+        let sin_dro = if (avg_h_adj - 275.0f64.to_radians()).abs() >= 85.0f64.to_radians() {
+            0.0
+        } else {
+            let exponent = (avg_h_adj / 25.0f64.to_radians() - 11.0).powi(2);
+            let mul = 1.0 - exponent * (25.0 / 289.0);
+            (TAU / 6.0 * (-exponent).exp() * mul).sin()
+        };
+
+        let sl = 1.0 + 0.015 * (avg_l - 50.0).powi(2) / (20.0 + (avg_l - 50.0).powi(2)).sqrt();
+        let sc = 1.0 + 0.045 * avg_c_adj;
+        let sh = 1.0 + 0.015 * avg_c_adj * t;
+        let rt = -2.0 * (avg_c_adj.powi(7) / (avg_c_adj.powi(7) + 25.0_f64.powi(7))).sqrt() * sin_dro;
+        let rt_repair = if diff_h_adj.abs() > 140.0f64.to_radians() {
+            rt * (4.5 - diff_h_adj.abs() / 40.0f64.to_radians())
+        } else {
+            rt
+        };
+
+        (diff_l_adj / sl).powi(2) + (diff_c_adj / sc).powi(2) + (diff_H_adj / sh).powi(2) + rt_repair * (diff_c_adj / sc) * (diff_H_adj / sh)
     }
 }

@@ -117,7 +117,7 @@ pub const YLILUOMA_EXAMPLE_ALTERNATE: [Srgb8; 16] = [
 ];
 
 
-pub fn make_simplex_palette(palette_size: usize, pixels: impl Iterator<Item=image::Rgb<u8>>) -> Vec<image::Rgb<u8>> {
+pub fn make_simplex_palette(palette_size: usize, pixels: impl Iterator<Item=image::Rgb<u8>>, distance2: fn(Lab, Lab) -> f64) -> Vec<image::Rgb<u8>> {
     struct SimplexCut {
         vertices_rgb: [Srgb8; 4],
         vertices_lin: [LinearRgb; 4],
@@ -132,7 +132,7 @@ pub fn make_simplex_palette(palette_size: usize, pixels: impl Iterator<Item=imag
             self.diameter2 * self.points.len() as f64
         }
 
-        fn optimize(&mut self, referenced_points: &mut std::collections::HashMap<image::Rgb<u8>, usize>) {
+        fn optimize(&mut self, referenced_points: &mut std::collections::HashMap<image::Rgb<u8>, usize>, distance2: fn(Lab, Lab) -> f64) {
             let mut changed = false;
             for opt_vertex in 0..4 {
                 for other_vertex in (0..4).filter(|&v| v != opt_vertex) {
@@ -183,7 +183,7 @@ pub fn make_simplex_palette(palette_size: usize, pixels: impl Iterator<Item=imag
                 let mut max_distance_seen = 0.0;
                 let mut max_distance_edge = [0, 1];
                 for &edge in &[[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]] {
-                    let dist2 = Lab::ciede2000_distance2(self.vertices_lab[edge[0]], self.vertices_lab[edge[1]]);
+                    let dist2 = distance2(self.vertices_lab[edge[0]], self.vertices_lab[edge[1]]);
                     if dist2 > max_distance_seen {
                         max_distance_seen = dist2;
                         max_distance_edge = edge;
@@ -311,7 +311,7 @@ pub fn make_simplex_palette(palette_size: usize, pixels: impl Iterator<Item=imag
         //    split_node.vertices_rgb[2].data[0], split_node.vertices_rgb[2].data[1], split_node.vertices_rgb[2].data[2],
         //    split_node.vertices_rgb[3].data[0], split_node.vertices_rgb[3].data[1], split_node.vertices_rgb[3].data[2],
         //);
-        split_node.optimize(&mut referenced_points);
+        split_node.optimize(&mut referenced_points, distance2);
         //eprintln!("  #{:02x}{:02x}{:02x}, #{:02x}{:02x}{:02x}, #{:02x}{:02x}{:02x}, #{:02x}{:02x}{:02x}",
         //    split_node.vertices_rgb[0].data[0], split_node.vertices_rgb[0].data[1], split_node.vertices_rgb[0].data[2],
         //    split_node.vertices_rgb[1].data[0], split_node.vertices_rgb[1].data[1], split_node.vertices_rgb[1].data[2],
@@ -373,7 +373,7 @@ pub fn make_simplex_palette(palette_size: usize, pixels: impl Iterator<Item=imag
             let mut max_distance_seen = 0.0;
             let mut max_distance_edge = [0, 1];
             for &edge in &[[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]] {
-                let dist2 = Lab::ciede2000_distance2(new_vertices_lab[i][edge[0]], new_vertices_lab[i][edge[1]]);
+                let dist2 = distance2(new_vertices_lab[i][edge[0]], new_vertices_lab[i][edge[1]]);
                 if dist2 > max_distance_seen {
                     max_distance_seen = dist2;
                     max_distance_edge = edge;
@@ -410,7 +410,7 @@ pub fn make_simplex_palette(palette_size: usize, pixels: impl Iterator<Item=imag
     }
 
     while let Some(mut node) = nodes.pop() {
-        node.optimize(&mut referenced_points);
+        node.optimize(&mut referenced_points, distance2);
     }
 
     for &color in referenced_points.keys() {

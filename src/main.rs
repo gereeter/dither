@@ -1,4 +1,4 @@
-extern crate clap;
+#[macro_use] extern crate clap;
 extern crate image;
 extern crate rayon;
 
@@ -16,12 +16,12 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator, ParallelBridge};
 // seen. This may be the result of errors being done in floating point, which allows them to grow arbitrarily large and excessive, combined
 // with CIEDE2000 continuing to choose a value that doesn't correct for the error. Therefore, there is also a manual clamping that can be
 // enabled to force errors within a reasonable range. TODO: make color comparison configuable, and see if that fixes things
-fn floyd_steinberg(img: &mut image::RgbImage, palette: &[Srgb8], linear_palette: &[LinearRgb], lab_palette: &[Lab], serpentine: bool, clamp: bool) {
+fn floyd_steinberg(img: &mut image::RgbImage, palette: &[Srgb8], linear_palette: &[LinearRgb], lab_palette: &[Lab], serpentine: bool, clamp: bool, distance2: fn(Lab, Lab) -> f64) {
     let select_color = |rgb: LinearRgb| -> usize {
         let lab = Lab::from(rgb);
         // Since error diffusion is mostly inherently serial, we parallelize the search for the nearest color
         if lab_palette.len() < 250 { // TODO: don't just do an ad-hoc switch
-            (0..lab_palette.len()).map(|i| (i, Lab::ciede2000_distance2(lab, lab_palette[i])))
+            (0..lab_palette.len()).map(|i| (i, distance2(lab, lab_palette[i])))
                                   .fold((!0, core::f64::INFINITY), |(i1, d1), (i2, d2)| {
                                       if d1 < d2 {
                                           (i1, d1)
@@ -31,7 +31,7 @@ fn floyd_steinberg(img: &mut image::RgbImage, palette: &[Srgb8], linear_palette:
                                   }).0
         } else {
             (0..lab_palette.len()).into_par_iter()
-                                  .map(|i| (i, Lab::ciede2000_distance2(lab, lab_palette[i])))
+                                  .map(|i| (i, distance2(lab, lab_palette[i])))
                                   .reduce(|| (!0, core::f64::INFINITY), |(i1, d1), (i2, d2)| {
                                       if d1 < d2 {
                                           (i1, d1)
@@ -104,12 +104,12 @@ fn floyd_steinberg(img: &mut image::RgbImage, palette: &[Srgb8], linear_palette:
 }
 
 // Simple quantization: map each pixel to the nearest palette color.
-fn nearest(pixel: Srgb8, palette: &[Srgb8], _linear_palette: &[LinearRgb], lab_palette: &[Lab], _bias: f64) -> Srgb8 {
+fn nearest(pixel: Srgb8, palette: &[Srgb8], _linear_palette: &[LinearRgb], lab_palette: &[Lab], _bias: f64, distance2: fn(Lab, Lab) -> f64) -> Srgb8 {
     let lab_pixel = Lab::from(pixel);
     let mut best_dist = std::f64::INFINITY;
     let mut best = None;
     for (&opt, &lab_opt) in palette.iter().zip(lab_palette.iter()) {
-        let dist = Lab::ciede2000_distance2(lab_opt, lab_pixel);
+        let dist = distance2(lab_opt, lab_pixel);
         if dist < best_dist {
             best_dist = dist;
             best = Some(opt);
@@ -122,14 +122,14 @@ fn nearest(pixel: Srgb8, palette: &[Srgb8], _linear_palette: &[LinearRgb], lab_p
 // A simple dithering scheme in the style of Yliluoma or simplex dithering: it chooses two nearby palette colors,
 // then quasirandomly chooses between them. This is really just a toy and should probably be removed. It doesn't
 // work very well.
-fn nearest2_inv2_dist(pixel: Srgb8, palette: &[Srgb8], _linear_palette: &[LinearRgb], lab_palette: &[Lab], bias: f64) -> image::Rgb<u8> {
+fn nearest2_inv2_dist(pixel: Srgb8, palette: &[Srgb8], _linear_palette: &[LinearRgb], lab_palette: &[Lab], bias: f64, distance2: fn(Lab, Lab) -> f64) -> image::Rgb<u8> {
     let lab_pixel = Lab::from(pixel);
     let mut best_dist = std::f64::INFINITY;
     let mut best2_dist = std::f64::INFINITY;
     let mut best = None;
     let mut best2 = None;
     for (&opt, &lab_opt) in palette.iter().zip(lab_palette.iter()) {
-        let dist = Lab::ciede2000_distance2(lab_opt, lab_pixel);
+        let dist = distance2(lab_opt, lab_pixel);
         if dist < best_dist {
             best2_dist = best_dist;
             best2 = best;
@@ -186,7 +186,7 @@ fn nearest2_inv2_dist(pixel: Srgb8, palette: &[Srgb8], _linear_palette: &[Linear
 // of CIEDE2000, much of the runtime seems to be consumed in color distance calculations. Avoiding doing the
 // calculation between every pixel and every palette color, possibly with some sort of spatial data structure,
 // would seem more prudent and effective. TODO: Optimize!
-fn tight_simplex(pixel: Srgb8, palette: &[Srgb8], linear_palette: &[LinearRgb], lab_palette: &[Lab], bias: f64) -> Srgb8 {
+fn tight_simplex(pixel: Srgb8, palette: &[Srgb8], linear_palette: &[LinearRgb], lab_palette: &[Lab], bias: f64, distance2: fn(Lab, Lab) -> f64) -> Srgb8 {
     let linear_pixel = LinearRgb::from(pixel);
     let lab_pixel = Lab::from(linear_pixel);
 
@@ -195,7 +195,7 @@ fn tight_simplex(pixel: Srgb8, palette: &[Srgb8], linear_palette: &[LinearRgb], 
     let mut trans_palette: Vec<_> = palette.iter().cloned().enumerate().map(|(i, rgb8)| {
         let linear = subtract(linear_palette[i], linear_pixel); // Shift to our pixel being at the origin, since this simplifies a good chunk of the math.
         let lab = lab_palette[i];
-        let dist2 = Lab::ciede2000_distance2(lab_pixel, lab);
+        let dist2 = distance2(lab_pixel, lab);
         (rgb8, linear, dist2, false, lab.l)
     }).collect();
     trans_palette.sort_unstable_by(|&(_, _, d1, _, _), &(_, _, d2, _, _)| d1.partial_cmp(&d2).unwrap());
@@ -346,7 +346,7 @@ fn tight_simplex(pixel: Srgb8, palette: &[Srgb8], linear_palette: &[LinearRgb], 
             if offset_mag >= 0.0 && offset_mag <= mag2_12 {
                 // Only consider points that are better than the best seen
                 let lab_projected = Lab::from(projected);
-                let dist2 = Lab::ciede2000_distance2(lab_projected, lab_pixel);
+                let dist2 = distance2(lab_projected, lab_pixel);
                 //eprintln!(" Projected: {:?}", LinearRgb::from(projected).data);
                 //eprintln!(" Dist: {}, Point: {}", dist2, best_dist2);
                 if dist2 < best_dist2 {
@@ -386,7 +386,7 @@ fn tight_simplex(pixel: Srgb8, palette: &[Srgb8], linear_palette: &[LinearRgb], 
                 let offset = normal * (vec_1p.dot(normal) / mag2_normal); // Do the projection by projecting onto the normal and subtracting
                 let projected = (-offset) + plab_pixel;
                 let lab_projected = Lab::from(projected);
-                let dist2 = Lab::ciede2000_distance2(lab_projected, lab_pixel);
+                let dist2 = distance2(lab_projected, lab_pixel);
                 if dist2 < best_dist2 {
                     let proj_p1 = offset - vec_1p;
                     let proj_p2 = proj_p1 + vec_12;
@@ -445,7 +445,9 @@ fn main() {
             .version("0.1")
             .author("Jonathan S <gereeter+code@gmail.com>")
             .about("High-quality ordered dithering")
-            .arg(clap::Arg::with_name("PALETTE").short("p").long("palette").takes_value(true).default_value("websafe").help("Chooses the palette to quantize to"))
+            .arg(clap::Arg::with_name("PALETTE").short("p").long("palette").takes_value(true).default_value("simplex").help("Chooses the palette to quantize to"))
+            .arg(clap::Arg::with_name("PALETTE_SIZE").short("c").long("colors").takes_value(true).default_value("16").help("How many colors to use in a procedural palette"))
+            .arg(clap::Arg::with_name("DISTANCE").short("d").long("distance").takes_value(true).default_value("CIEDE2000").help("Chooses how to calculate how far apart colors are"))
             .arg(clap::Arg::with_name("ALGORITHM").short("a").long("algorithm").takes_value(true).default_value("simplex").help("Chooses the dithering algorithm to use"))
             .arg(clap::Arg::with_name("OUTPUT").short("o").long("output").takes_value(true).default_value("out.png").help("Sets where to write the dithered file to"))
             .arg(clap::Arg::with_name("IMAGE").required(true).help("Sets the image to dither"))
@@ -454,6 +456,17 @@ fn main() {
     let file_name = arg_matches.value_of_os("IMAGE").unwrap();
     let out_file_name = arg_matches.value_of_os("OUTPUT").unwrap();
     let mut img = into_rgb(image::open(&file_name).unwrap());
+
+    let distance2_func = match arg_matches.value_of("DISTANCE") {
+        Some("CIE1994") | Some("CIE94") => Lab::cie1994_distance2,
+        Some("symCIE1994") => Lab::sym_cie1994_distance2,
+        Some("wdsCIE1994") => Lab::wds_cie1994_distance2,
+        Some("CIEDE2000") | None => Lab::ciede2000_distance2,
+        Some("contCIEDE2000") => Lab::cont_ciede2000_distance2,
+        _ => panic!("Unrecognized color distance function!"),
+    };
+
+    let palette_size = value_t_or_exit!(arg_matches.value_of("PALETTE_SIZE"), usize);
 
     let palette = match arg_matches.value_of("PALETTE").unwrap() {
         "bw" | "1bit" => vec![Srgb8 { data: [0,0,0] }, Srgb8 { data: [255,255,255] }],
@@ -468,16 +481,11 @@ fn main() {
         "15bit" | "r32g32b32" => palettes::grid(32, 32, 32),
         "yliluoma" => palettes::YLILUOMA_EXAMPLE.to_vec(),
         "yliluoma_alternate" => palettes::YLILUOMA_EXAMPLE_ALTERNATE.to_vec(),
-        "octree16" => palettes::make_box_palette(16, img.pixels().cloned(), palettes::Split::Half, true),
-        "octree256" => palettes::make_box_palette(256, img.pixels().cloned(), palettes::Split::Half, true),
-        "octree16-notight" => palettes::make_box_palette(16, img.pixels().cloned(), palettes::Split::Half, false),
-        "octree256-notight" => palettes::make_box_palette(256, img.pixels().cloned(), palettes::Split::Half, false),
-        "mediancut-box16" => palettes::make_box_palette(16, img.pixels().cloned(), palettes::Split::Median, true),
-        "mediancut-box256" => palettes::make_box_palette(256, img.pixels().cloned(), palettes::Split::Median, true),
-        "meancut-box16" => palettes::make_box_palette(16, img.pixels().cloned(), palettes::Split::Mean, true),
-        "meancut-box256" => palettes::make_box_palette(256, img.pixels().cloned(), palettes::Split::Mean, true),
-        "simplex16" => palettes::make_simplex_palette(16, img.pixels().cloned()),
-        "simplex256" => palettes::make_simplex_palette(256, img.pixels().cloned()),
+        "octree" => palettes::make_box_palette(palette_size, img.pixels().cloned(), palettes::Split::Half, true),
+        "octree-notight" => palettes::make_box_palette(palette_size, img.pixels().cloned(), palettes::Split::Half, false),
+        "mediancut-box" => palettes::make_box_palette(palette_size, img.pixels().cloned(), palettes::Split::Median, true),
+        "meancut-box" => palettes::make_box_palette(palette_size, img.pixels().cloned(), palettes::Split::Mean, true),
+        "simplex" => palettes::make_simplex_palette(palette_size, img.pixels().cloned(), distance2_func),
         _ => panic!("Unrecognized palette!")
     };
 
@@ -491,22 +499,22 @@ fn main() {
         "nearest2:d^-2" => nearest2_inv2_dist,
         "simplex" => tight_simplex,
         "floyd-steinberg" => {
-            floyd_steinberg(&mut img, &palette, &linear_palette, &lab_palette, false, false);
+            floyd_steinberg(&mut img, &palette, &linear_palette, &lab_palette, false, false, distance2_func);
             img.save(out_file_name).unwrap();
             return;
         },
         "floyd-steinberg+serpentine" => {
-            floyd_steinberg(&mut img, &palette, &linear_palette, &lab_palette, true, false);
+            floyd_steinberg(&mut img, &palette, &linear_palette, &lab_palette, true, false, distance2_func);
             img.save(out_file_name).unwrap();
             return;
         },
         "floyd-steinberg+clamp" => {
-            floyd_steinberg(&mut img, &palette, &linear_palette, &lab_palette, false, true);
+            floyd_steinberg(&mut img, &palette, &linear_palette, &lab_palette, false, true, distance2_func);
             img.save(out_file_name).unwrap();
             return;
         },
         "floyd-steinberg+clamp+serpentine" => {
-            floyd_steinberg(&mut img, &palette, &linear_palette, &lab_palette, true, true);
+            floyd_steinberg(&mut img, &palette, &linear_palette, &lab_palette, true, true, distance2_func);
             img.save(out_file_name).unwrap();
             return;
         },
@@ -532,7 +540,7 @@ fn main() {
 
         //eprintln!();
         //eprintln!("Pixel at ({}, {})", x, y);
-        *pixel = algorithm(*pixel, &palette, &linear_palette, &lab_palette, bias);
+        *pixel = algorithm(*pixel, &palette, &linear_palette, &lab_palette, bias, distance2_func);
     });
 
     img.save(out_file_name).unwrap();
