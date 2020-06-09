@@ -489,6 +489,10 @@ fn tight_simplex(pixel: Srgb8, palette: &[Srgb8], linear_palette: &[LinearRgb], 
     return best_sample;
 }
 
+fn visualize_bias(_pixel: Srgb8, _palette: &[Srgb8], _linear_palette: &[LinearRgb], _lab_palette: &[Lab], bias: f64, _distance2: fn(Lab, Lab) -> f64) -> Srgb8 {
+    Srgb8::from(LinearRgb { data: [bias, bias, bias] })
+}
+
 fn into_rgb(img: image::DynamicImage) -> image::RgbImage {
     if let image::DynamicImage::ImageRgb8(rgb_img) = img {
         rgb_img
@@ -659,6 +663,8 @@ fn main() {
             img.save(out_file_name).unwrap();
             return;
         },
+        // For debugging
+        "visualize-bias" => visualize_bias,
         _ => panic!("Unrecognized algorithm!")
     };
 
