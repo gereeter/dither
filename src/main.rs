@@ -153,6 +153,62 @@ fn nearest2_inv2_dist(pixel: Srgb8, palette: &[Srgb8], _linear_palette: &[Linear
     }
 }
 
+fn nearest2_project(pixel: Srgb8, palette: &[Srgb8], linear_palette: &[LinearRgb], lab_palette: &[Lab], bias: f64, distance2: fn(Lab, Lab) -> f64) -> image::Rgb<u8> {
+    let linear_pixel = LinearRgb::from(pixel);
+    let lab_pixel = Lab::from(linear_pixel);
+
+    let mut trans_palette: Vec<_> = palette.iter().cloned().enumerate().map(|(i, rgb8)| {
+        let linear = subtract(linear_palette[i], linear_pixel); // Shift to our pixel being at the origin, since this simplifies a good chunk of the math.
+        let lab = lab_palette[i];
+        let dist2 = distance2(lab_pixel, lab);
+        (rgb8, linear, dist2, lab.l)
+    }).collect();
+    trans_palette.sort_unstable_by(|&(_, _, d1, _), &(_, _, d2, _)| d1.partial_cmp(&d2).unwrap());
+
+    // Fast path that also avoids some of the most annoying edge cases: if we're on a palette color, just return that.
+    if trans_palette[0].2 < 1e-20 {
+        return trans_palette[0].0;
+    }
+
+    let plab_pixel = PseudoLab::from(linear_pixel);
+
+    for index2 in 1..trans_palette.len() {
+        for index1 in 0..index2 {
+            // TODO: just scale directly
+            let point_1 = PseudoLab::from(trans_palette[index1].1 + linear_pixel);
+            let point_2 = PseudoLab::from(trans_palette[index2].1 + linear_pixel);
+
+            // Project our point onto the line segment
+            let vec_12 = subtract(point_2, point_1);
+            let vec_1p = subtract(plab_pixel, point_1);
+            let mag2_12 = vec_12.dot(vec_12);
+            let proj_1p = vec_12 * (vec_1p.dot(vec_12) / mag2_12);
+            let projected = proj_1p + point_1;
+
+            // Test whether we are actually in the segment, not elsewhere on the line
+            let offset_mag = proj_1p.dot(vec_12);
+            //eprintln!("Line: {}", offset_mag / mag2_12);
+            if offset_mag >= 0.0 && offset_mag <= mag2_12 {
+                // Ensure our palette is sorted
+                let bias_shifted = if trans_palette[index1].3 < trans_palette[index2].3 {
+                    1.0 - bias
+                } else {
+                    bias
+                };
+
+                // Select between the two points
+                if bias_shifted * mag2_12 <= offset_mag {
+                    return trans_palette[index2].0;
+                } else {
+                    return trans_palette[index1].0;
+                }
+            }
+        }
+    }
+
+    return trans_palette[0].0;
+}
+
 // The simplex ordered dithering algorithm. The majority of the actual code here is dealing with edge cases.
 // The basic idea is to look for a simplex in linear space that contains the actual color value of the pixel
 // we wish to represent. Then, we represent that pixel in barycentric coordinates within the simplex so that
@@ -581,6 +637,7 @@ fn main() {
     let algorithm = match arg_matches.value_of("ALGORITHM").unwrap() {
         "nearest" => nearest,
         "nearest2:d^-2" => nearest2_inv2_dist,
+        "nearest2:project" => nearest2_project,
         "simplex" => tight_simplex,
         "floyd-steinberg" => {
             floyd_steinberg(&mut img, &palette, &linear_palette, &lab_palette, false, false, distance2_func);
