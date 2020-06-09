@@ -471,6 +471,7 @@ fn main() {
     let palette = match arg_matches.value_of("PALETTE").unwrap() {
         "bw" | "1bit" => vec![Srgb8 { data: [0,0,0] }, Srgb8 { data: [255,255,255] }],
         "websafe" | "r6g6b6" => palettes::grid(6, 6, 6),
+        "reallysafe" => palettes::REALLYSAFE.to_vec(),
         "3bit" | "r2g2b2" => palettes::grid(2, 2, 2),
         "rgbi" => palettes::RGBI.to_vec(),
         "microsoft16" => palettes::MICROSOFT16.to_vec(),
