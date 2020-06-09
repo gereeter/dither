@@ -1,6 +1,7 @@
 #[macro_use] extern crate clap;
 extern crate image;
 extern crate rayon;
+extern crate rand;
 
 mod palettes;
 mod color;
@@ -9,6 +10,7 @@ mod geom;
 use color::{Srgb8, LinearRgb, Lab, PseudoLab};
 use geom::{Vec3, determinant, subtract};
 
+use rand::Rng as _;
 use rayon::iter::{IntoParallelIterator, ParallelIterator, ParallelBridge};
 
 // Traditional Floyd-Steinberg dithering. Or it would be, except that everything is gamma-correct and using CIEDE2000, which seems to
@@ -439,6 +441,22 @@ fn into_rgb(img: image::DynamicImage) -> image::RgbImage {
     }
 }
 
+fn spread(x: u8) -> u16 {
+    let mut ret = x as u16;
+    ret = (ret ^ (ret << 4)) & 0x0f0f;
+    ret = (ret ^ (ret << 2)) & 0x3333;
+    ret = (ret ^ (ret << 1)) & 0x5555;
+    ret
+}
+
+fn bayer(bits: u32, x: u32, y: u32) -> f64 {
+    let size = 1 << bits;
+    let grid_x = spread((x%size) as u8);
+    let grid_y = spread((y%size) as u8);
+    let mixed = (grid_x ^ (grid_x << 1) ^ grid_y).reverse_bits() >> (16 - 2*bits);
+    (0.5 + mixed as f64) / (size*size) as f64
+}
+
 fn main() {
     let arg_matches =
         clap::App::new("dither")
@@ -448,6 +466,7 @@ fn main() {
             .arg(clap::Arg::with_name("PALETTE").short("p").long("palette").takes_value(true).default_value("simplex").help("Chooses the palette to quantize to"))
             .arg(clap::Arg::with_name("PALETTE_SIZE").short("c").long("colors").takes_value(true).default_value("16").help("How many colors to use in a procedural palette"))
             .arg(clap::Arg::with_name("DISTANCE").short("d").long("distance").takes_value(true).default_value("CIEDE2000").help("Chooses how to calculate how far apart colors are"))
+            .arg(clap::Arg::with_name("BIAS").short("b").long("bias").takes_value(true).default_value("plastic+triangle").help("Chooses the bias pattern for ordered dithering algorithms"))
             .arg(clap::Arg::with_name("ALGORITHM").short("a").long("algorithm").takes_value(true).default_value("simplex").help("Chooses the dithering algorithm to use"))
             .arg(clap::Arg::with_name("OUTPUT").short("o").long("output").takes_value(true).default_value("out.png").help("Sets where to write the dithered file to"))
             .arg(clap::Arg::with_name("IMAGE").required(true).help("Sets the image to dither"))
@@ -457,19 +476,83 @@ fn main() {
     let out_file_name = arg_matches.value_of_os("OUTPUT").unwrap();
     let mut img = into_rgb(image::open(&file_name).unwrap());
 
-    let distance2_func = match arg_matches.value_of("DISTANCE") {
-        Some("CIE1994") | Some("CIE94") => Lab::cie1994_distance2,
-        Some("symCIE1994") => Lab::sym_cie1994_distance2,
-        Some("wdsCIE1994") => Lab::wds_cie1994_distance2,
-        Some("CIEDE2000") | None => Lab::ciede2000_distance2,
-        Some("contCIEDE2000") => Lab::cont_ciede2000_distance2,
+    let distance2_func = match arg_matches.value_of("DISTANCE").unwrap() {
+        "CIE1994" | "CIE94" => Lab::cie1994_distance2,
+        "symCIE1994" => Lab::sym_cie1994_distance2,
+        "wdsCIE1994" => Lab::wds_cie1994_distance2,
+        "CIEDE2000" => Lab::ciede2000_distance2,
+        "contCIEDE2000" => Lab::cont_ciede2000_distance2,
         _ => panic!("Unrecognized color distance function!"),
+    };
+
+    let bias_func = match arg_matches.value_of("BIAS").unwrap() {
+        "interleavedgradient" => Box::new(|x:u32, y:u32| {
+            (52.9829189 * (0.06711056 * x as f64 + 0.00583715 * y as f64).fract()).fract()
+        }) as Box<dyn Fn(u32,u32)->f64+Sync>,
+        "plastic" => Box::new(|x:u32, y:u32| {
+            let plastic = 1.32471795724474602596;
+            (x as f64 / plastic + y as f64 / plastic.powi(2)).fract()
+        }) as Box<dyn Fn(u32,u32)->f64+Sync>,
+        "plastic+triangle" => Box::new(|x:u32, y:u32| {
+            // As suggested in The Unreasonable Effectiveness of Quasirandom Sequences (Martin Roberts),
+            // using a simple linear function based on the plastic number, composed with a triangle wave,
+            // gives good results for bias.
+            let plastic = 1.32471795724474602596;
+            let r_bias = (x as f64 / plastic + y as f64 / plastic.powi(2)).fract();
+            if r_bias < 0.5 {
+                2.0 * r_bias
+            } else {
+                2.0 - 2.0 * r_bias
+            }
+        }) as Box<dyn Fn(u32,u32)->f64+Sync>,
+        "bayer2" => Box::new(|x:u32, y:u32| {
+            bayer(1, x, y)
+        }) as Box<dyn Fn(u32,u32)->f64+Sync>,
+        "bayer4" => Box::new(|x:u32, y:u32| {
+            bayer(2, x, y)
+        }) as Box<dyn Fn(u32,u32)->f64+Sync>,
+        "bayer8" => Box::new(|x:u32, y:u32| {
+            bayer(3, x, y)
+        }) as Box<dyn Fn(u32,u32)->f64+Sync>,
+        "bayer16" => Box::new(|x:u32, y:u32| {
+            bayer(4, x, y)
+        }),
+        "bayer256" => Box::new(|x:u32, y:u32| {
+            bayer(8, x, y)
+        }),
+        // Mostly useful for debugging
+        "block8" => Box::new(|x:u32, y:u32| {
+            let mixed = (x%8) + 8 * (y%8);
+            (0.5 + mixed as f64) / 64.0
+        }),
+        "zblock8" => Box::new(|x:u32, y:u32| {
+            let mixed = spread((x%8) as u8) | (spread((y%8) as u8) << 1);
+            (0.5 + mixed as f64) / 64.0
+        }),
+        // And for fun
+        "dot8" => Box::new(|x:u32, y:u32| {
+            let arr = [[60, 52, 51, 37, 36, 50, 59, 63],
+                       [53, 43, 28, 19, 18, 27, 42, 58],
+                       [44, 29, 13,  5,  4, 12, 26, 49],
+                       [38, 20,  6,  0,  3, 11, 17, 35],
+                       [39, 21,  7,  1,  2, 10, 16, 34],
+                       [45, 30, 14,  8,  9, 15, 25, 48],
+                       [54, 40, 31, 22, 23, 24, 41, 57],
+                       [61, 55, 46, 32, 33, 47, 56, 62]];
+            let mixed: u8 = arr[(y%8) as usize][(x%8) as usize];
+            (0.5 + mixed as f64) / 64.0
+        }),
+        "random" => Box::new(|_:u32, _:u32| {
+            rand::thread_rng().gen::<f64>()
+        }),
+        _ => panic!("Unrecognized bias function!")
     };
 
     let palette_size = value_t_or_exit!(arg_matches.value_of("PALETTE_SIZE"), usize);
 
     let palette = match arg_matches.value_of("PALETTE").unwrap() {
         "bw" | "1bit" => vec![Srgb8 { data: [0,0,0] }, Srgb8 { data: [255,255,255] }],
+        "gray256" | "grey256" => (0..=255).map(|v| Srgb8 { data: [v,v,v] }).collect(),
         "websafe" | "r6g6b6" => palettes::grid(6, 6, 6),
         "reallysafe" => palettes::REALLYSAFE.to_vec(),
         "3bit" | "r2g2b2" => palettes::grid(2, 2, 2),
@@ -523,17 +606,8 @@ fn main() {
     };
 
     img.enumerate_pixels_mut().par_bridge().for_each(|(x, y, pixel)| {
-        // As suggested in The Unreasonable Effectiveness of Quasirandom Sequences (Martin Roberts),
-        // using a simple linear function based on the plastic number, composed with a triangle wave,
-        // gives good results for bias.
         // TODO: make this configurable?
-        let plastic = 1.32471795724474602596;
-        let r_bias = (x as f64 / plastic + y as f64 / plastic.powi(2)).fract();
-        let bias = if r_bias < 0.5 {
-            2.0 * r_bias
-        } else {
-            2.0 - 2.0 * r_bias
-        };
+        let bias = bias_func(x, y);
 
         if x == 0 && y % 10 == 0 {
             eprintln!("Processing line {}", y);
