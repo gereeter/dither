@@ -625,6 +625,13 @@ fn main() {
         "15bit" | "r32g32b32" => palettes::grid(32, 32, 32),
         "yliluoma" => palettes::YLILUOMA_EXAMPLE.to_vec(),
         "yliluoma_alternate" => palettes::YLILUOMA_EXAMPLE_ALTERNATE.to_vec(),
+        "petz" => {
+          let mut unclean = palettes::PETZ_SOURCE.to_vec();
+          unclean.swap_remove(9); // Color 9 apparently renders unstably
+          unclean.sort_unstable_by(|a, b| a.data.cmp(&b.data));
+          unclean.dedup();
+          unclean
+        },
         "octree" => palettes::make_box_palette(palette_size, img.pixels().cloned(), palettes::Split::Half, true),
         "octree-notight" => palettes::make_box_palette(palette_size, img.pixels().cloned(), palettes::Split::Half, false),
         "mediancut-box" => palettes::make_box_palette(palette_size, img.pixels().cloned(), palettes::Split::Median, true),
