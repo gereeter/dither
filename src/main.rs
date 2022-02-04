@@ -1,4 +1,4 @@
-#[macro_use] extern crate clap;
+extern crate clap;
 extern crate image;
 extern crate rayon;
 extern crate rand;
@@ -10,6 +10,7 @@ mod geom;
 use color::{Srgb8, LinearRgb, Lab, PseudoLab};
 use geom::{Vec3, determinant, subtract};
 
+use image::Pixel;
 use rand::Rng as _;
 use rayon::iter::{IntoParallelIterator, ParallelIterator, ParallelBridge};
 
@@ -493,14 +494,6 @@ fn visualize_bias(_pixel: Srgb8, _palette: &[Srgb8], _linear_palette: &[LinearRg
     Srgb8::from(LinearRgb { data: [bias, bias, bias] })
 }
 
-fn into_rgb(img: image::DynamicImage) -> image::RgbImage {
-    if let image::DynamicImage::ImageRgb8(rgb_img) = img {
-        rgb_img
-    } else {
-        img.to_rgb()
-    }
-}
-
 fn spread(x: u8) -> u16 {
     let mut ret = x as u16;
     ret = (ret ^ (ret << 4)) & 0x0f0f;
@@ -523,18 +516,18 @@ fn main() {
             .version("0.1")
             .author("Jonathan S <gereeter+code@gmail.com>")
             .about("High-quality ordered dithering")
-            .arg(clap::Arg::with_name("PALETTE").short("p").long("palette").takes_value(true).default_value("simplex").help("Chooses the palette to quantize to"))
-            .arg(clap::Arg::with_name("PALETTE_SIZE").short("c").long("colors").takes_value(true).default_value("16").help("How many colors to use in a procedural palette"))
-            .arg(clap::Arg::with_name("DISTANCE").short("d").long("distance").takes_value(true).default_value("CIEDE2000").help("Chooses how to calculate how far apart colors are"))
-            .arg(clap::Arg::with_name("BIAS").short("b").long("bias").takes_value(true).default_value("plastic+triangle").help("Chooses the bias pattern for ordered dithering algorithms"))
-            .arg(clap::Arg::with_name("ALGORITHM").short("a").long("algorithm").takes_value(true).default_value("simplex").help("Chooses the dithering algorithm to use"))
-            .arg(clap::Arg::with_name("OUTPUT").short("o").long("output").takes_value(true).default_value("out.png").help("Sets where to write the dithered file to"))
-            .arg(clap::Arg::with_name("IMAGE").required(true).help("Sets the image to dither"))
+            .arg(clap::Arg::new("PALETTE").short('p').long("palette").takes_value(true).default_value("simplex").help("Chooses the palette to quantize to"))
+            .arg(clap::Arg::new("PALETTE_SIZE").short('c').long("colors").takes_value(true).default_value("16").help("How many colors to use in a procedural palette"))
+            .arg(clap::Arg::new("DISTANCE").short('d').long("distance").takes_value(true).default_value("CIEDE2000").help("Chooses how to calculate how far apart colors are"))
+            .arg(clap::Arg::new("BIAS").short('b').long("bias").takes_value(true).default_value("plastic+triangle").help("Chooses the bias pattern for ordered dithering algorithms"))
+            .arg(clap::Arg::new("ALGORITHM").short('a').long("algorithm").takes_value(true).default_value("simplex").help("Chooses the dithering algorithm to use"))
+            .arg(clap::Arg::new("OUTPUT").short('o').long("output").takes_value(true).default_value("out.png").help("Sets where to write the dithered file to"))
+            .arg(clap::Arg::new("IMAGE").required(true).help("Sets the image to dither"))
             .get_matches();
 
     let file_name = arg_matches.value_of_os("IMAGE").unwrap();
     let out_file_name = arg_matches.value_of_os("OUTPUT").unwrap();
-    let mut img = into_rgb(image::open(&file_name).unwrap());
+    let mut img = image::open(&file_name).unwrap().into_rgb8();
 
     let distance2_func = match arg_matches.value_of("DISTANCE").unwrap() {
         "CIE1994" | "CIE94" => Lab::cie1994_distance2,
@@ -608,11 +601,11 @@ fn main() {
         _ => panic!("Unrecognized bias function!")
     };
 
-    let palette_size = value_t_or_exit!(arg_matches.value_of("PALETTE_SIZE"), usize);
+    let palette_size: usize = arg_matches.value_of_t_or_exit("PALETTE_SIZE");
 
     let palette = match arg_matches.value_of("PALETTE").unwrap() {
-        "bw" | "1bit" => vec![Srgb8 { data: [0,0,0] }, Srgb8 { data: [255,255,255] }],
-        "gray256" | "grey256" => (0..=255).map(|v| Srgb8 { data: [v,v,v] }).collect(),
+        "bw" | "1bit" => vec![image::Rgb([0,0,0]), image::Rgb([255,255,255])],
+        "gray256" | "grey256" => (0..=255).map(|v| image::Rgb([v,v,v])).collect(),
         "websafe" | "r6g6b6" => palettes::grid(6, 6, 6),
         "reallysafe" => palettes::REALLYSAFE.to_vec(),
         "3bit" | "r2g2b2" => palettes::grid(2, 2, 2),
@@ -628,7 +621,7 @@ fn main() {
         "petz" => {
           let mut unclean = palettes::PETZ_SOURCE.to_vec();
           unclean.swap_remove(9); // Color 9 apparently renders unstably
-          unclean.sort_unstable_by(|a, b| a.data.cmp(&b.data));
+          unclean.sort_unstable_by(|a, b| a.channels().cmp(&b.channels()));
           unclean.dedup();
           unclean
         },
@@ -675,8 +668,8 @@ fn main() {
         _ => panic!("Unrecognized algorithm!")
     };
 
+    // Actually do the dithering
     img.enumerate_pixels_mut().par_bridge().for_each(|(x, y, pixel)| {
-        // TODO: make this configurable?
         let bias = bias_func(x, y);
 
         if x == 0 && y % 10 == 0 {
@@ -690,4 +683,3 @@ fn main() {
 
     img.save(out_file_name).unwrap();
 }
-

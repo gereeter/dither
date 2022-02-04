@@ -1,5 +1,7 @@
 use crate::geom::Affine3;
 
+use image::Pixel;
+
 //////// Color spaces ////////
 
 pub type Srgb8 = image::Rgb<u8>;
@@ -79,20 +81,20 @@ pub fn srgb_encode_channel(value: f64) -> u8 {
 impl From<Srgb8> for LinearRgb {
     fn from(srgb: Srgb8) -> LinearRgb {
         LinearRgb { data: [
-            srgb_decode_channel(srgb.data[0]),
-            srgb_decode_channel(srgb.data[1]),
-            srgb_decode_channel(srgb.data[2]),
+            srgb_decode_channel(srgb.channels()[0]),
+            srgb_decode_channel(srgb.channels()[1]),
+            srgb_decode_channel(srgb.channels()[2]),
         ] }
     }
 }
 
 impl From<LinearRgb> for Srgb8 {
     fn from(rgb: LinearRgb) -> Srgb8 {
-        Srgb8 { data: [
+        image::Rgb([
             srgb_encode_channel(rgb.data[0]),
             srgb_encode_channel(rgb.data[1]),
             srgb_encode_channel(rgb.data[2]),
-        ] }
+        ])
     }
 }
 
