@@ -18,20 +18,21 @@ cargo install --git https://github.com/gereeter/dither
 USAGE:
     dither [OPTIONS] <IMAGE>
 
-FLAGS:
-    -h, --help       Prints help information
-    -V, --version    Prints version information
+ARGS:
+    <IMAGE>    Sets the image to dither
 
 OPTIONS:
     -a, --algorithm <ALGORITHM>    Chooses the dithering algorithm to use [default: simplex]
-    -b, --bias <BIAS>              Chooses the bias pattern for ordered dithering algorithms [default: plastic+triangle]
-    -d, --distance <DISTANCE>      Chooses how to calculate how far apart colors are [default: CIEDE2000]
+    -b, --bias <BIAS>              Chooses the bias pattern for ordered dithering algorithms
+                                   [default: plastic+triangle]
+    -c, --colors <PALETTE_SIZE>    How many colors to use in a procedural palette [default: 16]
+    -d, --distance <DISTANCE>      Chooses how to calculate how far apart colors are [default:
+                                   CIEDE2000]
+    -h, --help                     Print help information
     -o, --output <OUTPUT>          Sets where to write the dithered file to [default: out.png]
     -p, --palette <PALETTE>        Chooses the palette to quantize to [default: simplex]
-    -c, --colors <PALETTE_SIZE>    How many colors to use in a procedural palette [default: 16]
-
-ARGS:
-    <IMAGE>    Sets the image to dither
+    -s, --summarize                Print a summary of the palette colors used in the output
+    -V, --version                  Print version information
 ```
 
 For example, if you want to dither an image to only use websafe colors, you might run
@@ -49,3 +50,6 @@ Bias patterns control the look and feel of the resulting dithered image, and onl
 - The default, `plastic+triangle`, produces a very even fabric-like pattern, based on the suggestion in [The Unreasonable Effectiveness of Quasirandom Sequences](http://extremelearning.com.au/unreasonable-effectiveness-of-quasirandom-sequences/).
 - For an old-school look, use `bayer256`, which implements the classic Bayer matrix ordered dithering on a large scale. Smaller Bayer matrices are available, but they can reduce quality for little gain.
 - For something approximating halftoning, use `dot8`, which deliberately groups colors together into larger artifacts. This was mostly intended for debugging, and so its quality isn't ideal for producing that look.
+- For a mottled look, consider using `random`, which uses actual pseudorandomness instead of quasirandomness to select between palette colors. It is very hard to control, but running it multiple times can give several options to choose between.
+
+For manually editing the results or embedding in other formats, the `--summarize` option can give insight into the results of dithering. For example, to get a distribution of colors useful for representing a single color, using a solid color image as input with `--summarize` will print out exactly the mix of palette colors necessary to produce that color. (There may be a dedicated function for this added later.)
