@@ -521,6 +521,7 @@ fn main() {
             .arg(clap::Arg::new("DISTANCE").short('d').long("distance").takes_value(true).default_value("CIEDE2000").help("Chooses how to calculate how far apart colors are"))
             .arg(clap::Arg::new("BIAS").short('b').long("bias").takes_value(true).default_value("plastic+triangle").help("Chooses the bias pattern for ordered dithering algorithms"))
             .arg(clap::Arg::new("ALGORITHM").short('a').long("algorithm").takes_value(true).default_value("simplex").help("Chooses the dithering algorithm to use"))
+            .arg(clap::Arg::new("summarize").short('s').long("summarize").help("Print a summary of the palette colors used in the output"))
             .arg(clap::Arg::new("OUTPUT").short('o').long("output").takes_value(true).default_value("out.png").help("Sets where to write the dithered file to"))
             .arg(clap::Arg::new("IMAGE").required(true).help("Sets the image to dither"))
             .get_matches();
@@ -694,4 +695,24 @@ fn main() {
     });
 
     img.save(out_file_name).unwrap();
+
+    if arg_matches.is_present("summarize") {
+        let root_palette: &[_] = match arg_matches.value_of("PALETTE").unwrap() {
+            "petz" | "petz_safe" => &palettes::PETZ_SOURCE,
+            _ => &palette
+        };
+
+        let mut counts = [0].repeat(root_palette.len());
+
+        for &pixel in img.pixels() {
+            let index = root_palette.iter().position(|&pal_color| pal_color == pixel).unwrap();
+            counts[index] += 1;
+        }
+
+        for (i, &count) in counts.iter().enumerate() {
+          if count > 0 {
+            println!("{}:\t{}", i, count);
+          }
+        }
+    }
 }
