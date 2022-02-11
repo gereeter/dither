@@ -620,7 +620,19 @@ fn main() {
         "yliluoma_alternate" => palettes::YLILUOMA_EXAMPLE_ALTERNATE.to_vec(),
         "petz" => {
           let mut unclean = palettes::PETZ_SOURCE.to_vec();
-          unclean.swap_remove(9); // Color 9 apparently renders unstably
+          // The petz palette has duplicates, so remove them.
+          unclean.sort_unstable_by(|a, b| a.channels().cmp(&b.channels()));
+          unclean.dedup();
+          unclean
+        },
+        "petz_safe" => {
+          let mut unclean = palettes::PETZ_SOURCE.to_vec();
+          // Removing in reverse doesn't mess up the other indices
+          // Would be nice if `drain_filter` got indices for this purpose
+          for unstable_index in (8..=9).chain(229..=243).chain(246..=248).chain(255..=255).rev() {
+            unclean.swap_remove(unstable_index);
+          }
+          // The petz palette has duplicates, so remove them.
           unclean.sort_unstable_by(|a, b| a.channels().cmp(&b.channels()));
           unclean.dedup();
           unclean
